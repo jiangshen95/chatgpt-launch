@@ -1,0 +1,105 @@
+# ChatGPT Launcher
+
+一个跨平台（macOS / Windows / Linux）的 **ChatGPT 桌面版启动器**：为每个"配置"绑定
+代理 / 时区 / 语言，一键以指定环境启动 ChatGPT 桌面版，并提供低风险的连接验证与
+IP·时区·语言一致性检查。
+
+> 定位类似 CC Switch / AdsPower 的"配置卡片 + 一键启动"，但面向 ChatGPT 官方桌面版。
+
+## 功能（v1）
+
+- **配置管理**：新建 / 编辑 / 复制 / 删除配置文件（卡片式列表）。
+- **代理**：支持 `socks5` / `http` / `https`，可带用户名密码。
+- **时区 / 语言**：可手动指定，或设为"自动"——启动时通过代理请求**中立第三方端点**
+  （ipinfo.io / ip.sb / ipapi.is，**绝不触碰 OpenAI**）探测出口位置，自动得出时区与语言。
+- **连接测试**：显示出口 IP / 国家 / 城市 / 时区，并给出"IP 与设备时区/语言是否一致"的
+  风控一致性提示，可一键应用检测结果。
+- **诊断模式（默认关闭）**：以 `--remote-debugging-port` 启动（仅绑定 `127.0.0.1`），
+  并可观测已启动进程的 socket 连接，判断它是否真的连到了本地代理端口。
+- **遥测开关**：UI 已预留 Sentry / Statsig / Sparkle 三处占位（仅保存配置，**v1 不生效**）。
+
+## 架构
+
+```
+chatgpt-launcher/
+├── core/                  # 纯逻辑库（无 GUI 依赖，可独立编译/测试）
+│   └── src/
+│       ├── model.rs       # 数据模型（Profile / ProxyConfig / ExitInfo ...）
+│       ├── store.rs       # JSON 持久化（CRUD）
+│       ├── launcher.rs    # 启动：定位 app + 注入环境变量/参数 + spawn
+│       ├── geo.rs         # 出口位置探测 + 国家→语言映射
+│       ├── consistency.rs # IP/时区/语言 一致性检查（风控提示）
+│       ├── platform.rs    # 三平台 app 定位 + socket 观测
+│       └── error.rs
+└── src-tauri/             # Tauri v2 壳层：tauri::command 封装 + 前端
+    └── src/lib.rs
+```
+
+- 后端：**Rust**（`core` 无 GUI 依赖，便于测试；`src-tauri` 只做命令转发与配置目录解析）。
+- 前端：**React 19 + TypeScript + Vite**，通过 Tauri IPC 调用 Rust 命令。
+
+## 构建
+
+### 依赖
+
+- Rust（stable）
+- Node.js ≥ 20、npm
+- 平台系统依赖（仅 Linux 需要）：`libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev`
+  —— 见 <https://tauri.app/start/prerequisites/>
+
+### 命令
+
+```bash
+npm install
+
+# 开发（前端热更新 + Tauri 窗口）
+npm run tauri dev
+
+# 打包安装器
+npm run tauri build
+
+# 仅测试核心逻辑（无需 GUI 系统依赖）
+cargo test -p chatgpt-launcher-core
+```
+
+> 本仓库的 `package.json` 声明了 `allowScripts: { "esbuild": true }`（npm ≥ 12 的
+> 脚本白名单），因为 Vite 依赖的 esbuild 需要执行 postinstall。
+
+## 工作原理
+
+启动一个配置时，`core::launcher` 会：
+
+1. 定位 ChatGPT 桌面版可执行文件（自动探测，或使用配置里手动指定的 `appPath`）；
+2. 若时区/语言设为"自动"，通过代理请求中立端点得到出口时区/语言；
+3. 构造启动命令：
+
+```text
+env:  HTTPS_PROXY / HTTP_PROXY / ALL_PROXY / NO_PROXY
+      TZ=<时区>  LANG=<语言>  LC_ALL=<语言>
+args: --proxy-server=<代理URL>  --lang=<语言>
+      （诊断模式追加） --remote-debugging-port=9224 --remote-debugging-address=127.0.0.1
+```
+
+4. `spawn` 并返回 PID / 实际参数等结果。
+
+## 平台说明与已知限制
+
+| 平台 | 说明 |
+|------|------|
+| macOS | 官方 app 是 Electron；为透传自定义环境变量，直接 exec `ChatGPT.app/Contents/MacOS/ChatGPT`（`open -a` 不会透传 env）。 |
+| Windows | 官方 app 同样可带参启动；**注意**：Chromium 在 Windows 上对 `TZ` 环境变量支持不可靠（[Chromium Issue 40200249](https://issues.chromium.org/issues/40200249)），时区注入可能需要后续额外处理。 |
+| Linux | 官方版处于公测，安装形态多样（AppImage/deb/snap），路径探测失败时请在配置里手动指定。 |
+
+## 安全与风控说明
+
+- **验证分层**：连接测试只打中立回显/地理端点，**从不请求 OpenAI**；socket 观测只看本机连接；
+  诊断模式默认关闭且仅绑定 `127.0.0.1`。
+- **一致性优先**：IP、时区、语言三者长期一致是规避风控的关键，本工具内置一致性检查正是为此。
+- 用代理访问 ChatGPT 可能触及 OpenAI 服务条款，请自行评估并遵守当地法规。
+
+## Roadmap
+
+- [ ] 遥测拦截（Sentry / Statsig / Sparkle），通过 hosts 或本地过滤代理实现
+- [ ] 代理出口健康度 / 独享性提示
+- [ ] 多账号与"一账号一 IP"的固定绑定提示
+- [ ] 自动更新（tauri-plugin-updater）
