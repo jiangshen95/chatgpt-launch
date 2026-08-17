@@ -71,9 +71,17 @@ pub fn launch(profile: &Profile, diagnostic_mode: bool) -> Result<LaunchResult, 
         cmd.arg(arg);
     }
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| Error::Other(format!("启动失败 ({app_path}): {e}")))?;
+    let child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied && is_windowsapps_path(&app_path) {
+            Error::Other(format!(
+                "启动失败：ChatGPT（Microsoft Store 版）位于受保护的 WindowsApps 目录，当前权限无法直接启动。\n\
+                 请以管理员身份运行本工具后重试（管理员可正常注入代理/时区/语言）。\n\
+                 底层错误: {e}"
+            ))
+        } else {
+            Error::Other(format!("启动失败 ({app_path}): {e}"))
+        }
+    })?;
     let pid = child.id();
 
     Ok(LaunchResult {
@@ -86,6 +94,12 @@ pub fn launch(profile: &Profile, diagnostic_mode: bool) -> Result<LaunchResult, 
         debug_port: diagnostic_mode.then_some(DEBUG_PORT),
         exit_info: resolved.exit_info,
     })
+}
+
+/// Microsoft Store 版应用位于受保护的 WindowsApps 目录，普通权限直接 CreateProcess
+/// 会被拒绝（ERROR_ACCESS_DENIED）；以管理员身份运行可绕过，并正常注入环境变量/参数。
+fn is_windowsapps_path(path: &str) -> bool {
+    path.to_ascii_lowercase().contains("windowsapps")
 }
 
 fn build_env(

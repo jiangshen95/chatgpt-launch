@@ -140,6 +140,7 @@ mod windows {
     use super::*;
 
     pub fn detect() -> Result<AppDetection, Error> {
+        // 1) 常规安装路径（非 Store 版本）。
         let mut candidates: Vec<String> = Vec::new();
         for key in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
             if let Ok(base) = std::env::var(key) {
@@ -154,11 +155,68 @@ mod windows {
             }
         }
 
+        // 2) Microsoft Store（MSIX）版本：官方 Windows 版经 Store 安装，位于受保护的
+        //    C:\Program Files\WindowsApps\ 下，只能通过包管理器（Get-AppxPackage）发现。
+        if let Some(p) = store_exe_path() {
+            return Ok(AppDetection {
+                path: Some(p),
+                source: "Microsoft Store".into(),
+                message: "已找到（Microsoft Store 版）。其位于受保护的 WindowsApps 目录：若启动提示权限不足，请以管理员身份运行本工具".into(),
+            });
+        }
+
         Ok(AppDetection {
             path: None,
             source: "windows".into(),
-            message: "未找到 ChatGPT.exe，请在配置中手动指定应用路径".into(),
+            message: "未找到 ChatGPT.exe（已检查标准路径与 Microsoft Store 安装），请在配置中手动指定应用路径".into(),
         })
+    }
+
+    /// 通过 PowerShell 包管理器发现 Microsoft Store 版 ChatGPT 的可执行文件。
+    /// `Get-AppxPackage` 读取注册表，无需直接访问 WindowsApps 目录即可拿到 InstallLocation。
+    /// 输出约定：`FOUND:<path>` 表示确认存在；`KNOWN:<path>` 表示按 InstallLocation 构造
+    /// （目录受 ACL 保护无法 `Test-Path`，仍返回给用户尝试）。
+    fn store_exe_path() -> Option<String> {
+        let script = concat!(
+            "$ErrorActionPreference='SilentlyContinue';",
+            "Get-AppxPackage *ChatGPT* | ForEach-Object {",
+            "  $dir = $_.InstallLocation;",
+            "  $exe = Join-Path $dir 'ChatGPT.exe';",
+            "  if (Test-Path -LiteralPath $exe) { Write-Output ('FOUND:' + $exe); return };",
+            "  $any = Get-ChildItem -LiteralPath $dir -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1;",
+            "  if ($any) { Write-Output ('FOUND:' + $any.FullName); return };",
+            "  Write-Output ('KNOWN:' + $exe)",
+            "}",
+        );
+
+        let out = run_powershell(script)?;
+        let mut known: Option<String> = None;
+        for line in out.lines() {
+            let line = line.trim();
+            if let Some(p) = line.strip_prefix("FOUND:") {
+                let p = p.trim().to_string();
+                if !p.is_empty() {
+                    return Some(p);
+                }
+            } else if let Some(p) = line.strip_prefix("KNOWN:") {
+                let p = p.trim().to_string();
+                if !p.is_empty() && known.is_none() {
+                    known = Some(p);
+                }
+            }
+        }
+        known
+    }
+
+    fn run_powershell(script: &str) -> Option<String> {
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     pub fn observe(pid: u32) -> Result<Vec<ConnectionInfo>, Error> {

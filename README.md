@@ -87,7 +87,7 @@ args: --proxy-server=<代理URL>  --lang=<语言>
 | 平台 | 说明 |
 |------|------|
 | macOS | 官方 app 是 Electron；为透传自定义环境变量，直接 exec `ChatGPT.app/Contents/MacOS/ChatGPT`（`open -a` 不会透传 env）。 |
-| Windows | 官方 app 同样可带参启动；**注意**：Chromium 在 Windows 上对 `TZ` 环境变量支持不可靠（[Chromium Issue 40200249](https://issues.chromium.org/issues/40200249)），时区注入可能需要后续额外处理。 |
+| Windows | 官方 app 为 **Microsoft Store 签名的 MSIX** 应用（无独立 MSI/EXE），默认装于受保护的 `C:\Program Files\WindowsApps\`，本工具通过 `Get-AppxPackage` 自动发现。若直接启动被 ACL 拒绝（权限不足），请**以管理员身份运行本工具**；Store 版能否接受注入的 `--proxy-server`/环境变量需实机验证。另：Windows 上 Chromium 对 `TZ` 环境变量支持不可靠（[Chromium Issue 40200249](https://issues.chromium.org/issues/40200249)）。 |
 | Linux | 官方版处于公测，安装形态多样（AppImage/deb/snap），路径探测失败时请在配置里手动指定。 |
 
 ## 安全与风控说明
