@@ -168,44 +168,40 @@ mod windows {
         Ok(AppDetection {
             path: None,
             source: "windows".into(),
-            message: "未找到 ChatGPT.exe（已检查标准路径与 Microsoft Store 安装），请在配置中手动指定应用路径".into(),
+            message: "未找到 ChatGPT / Codex（已检查标准路径与 Microsoft Store 安装），请在配置中手动指定应用路径".into(),
         })
     }
 
-    /// 通过 PowerShell 包管理器发现 Microsoft Store 版 ChatGPT 的可执行文件。
-    /// `Get-AppxPackage` 读取注册表，无需直接访问 WindowsApps 目录即可拿到 InstallLocation。
-    /// 输出约定：`FOUND:<path>` 表示确认存在；`KNOWN:<path>` 表示按 InstallLocation 构造
-    /// （目录受 ACL 保护无法 `Test-Path`，仍返回给用户尝试）。
+    /// 通过 PowerShell 包管理器发现 Microsoft Store 版 ChatGPT/Codex 的可执行文件。
+    /// `Get-AppxPackage` 读取注册表、`Get-AppxPackageManifest` 读取包清单（均无需直接
+    /// 访问受保护的 WindowsApps 目录），从而拿到权威的可执行文件名——覆盖 exe 位于
+    /// `app\` 子目录、以及包名为 `OpenAI.Codex` 等非 "ChatGPT" 命名的情况。
     fn store_exe_path() -> Option<String> {
         let script = concat!(
             "$ErrorActionPreference='SilentlyContinue';",
-            "Get-AppxPackage *ChatGPT* | ForEach-Object {",
-            "  $dir = $_.InstallLocation;",
-            "  $exe = Join-Path $dir 'ChatGPT.exe';",
-            "  if (Test-Path -LiteralPath $exe) { Write-Output ('FOUND:' + $exe); return };",
-            "  $any = Get-ChildItem -LiteralPath $dir -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1;",
-            "  if ($any) { Write-Output ('FOUND:' + $any.FullName); return };",
-            "  Write-Output ('KNOWN:' + $exe)",
+            "Get-AppxPackage | Where-Object { $_.Name -match 'OpenAI|ChatGPT|Codex' } | ForEach-Object {",
+            "  $pkg = $_;",
+            "  $m = Get-AppxPackageManifest -Package $pkg;",
+            "  $app = @($m.Package.Applications.Application)[0];",
+            "  if ($app -and $app.Executable) { Write-Output ('PATH:' + (Join-Path $pkg.InstallLocation $app.Executable)) }",
+            "  else {",
+            "    $exe = Get-ChildItem -LiteralPath $pkg.InstallLocation -Recurse -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1;",
+            "    if ($exe) { Write-Output ('PATH:' + $exe.FullName) }",
+            "  }",
             "}",
         );
 
         let out = run_powershell(script)?;
-        let mut known: Option<String> = None;
         for line in out.lines() {
             let line = line.trim();
-            if let Some(p) = line.strip_prefix("FOUND:") {
+            if let Some(p) = line.strip_prefix("PATH:") {
                 let p = p.trim().to_string();
                 if !p.is_empty() {
                     return Some(p);
                 }
-            } else if let Some(p) = line.strip_prefix("KNOWN:") {
-                let p = p.trim().to_string();
-                if !p.is_empty() && known.is_none() {
-                    known = Some(p);
-                }
             }
         }
-        known
+        None
     }
 
     fn run_powershell(script: &str) -> Option<String> {
