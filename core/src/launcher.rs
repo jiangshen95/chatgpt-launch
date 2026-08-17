@@ -67,7 +67,12 @@ pub fn launch(profile: &Profile, diagnostic_mode: bool) -> Result<LaunchResult, 
     ) {
         cmd.env(k, v);
     }
-    for arg in build_args(&proxy_url, resolved.language.as_deref(), diagnostic_mode) {
+    for arg in build_args(
+        &proxy_url,
+        resolved.timezone.as_deref(),
+        resolved.language.as_deref(),
+        diagnostic_mode,
+    ) {
         cmd.arg(arg);
     }
 
@@ -126,14 +131,30 @@ fn build_env(
     env
 }
 
-fn build_args(proxy_url: &str, language: Option<&str>, diagnostic_mode: bool) -> Vec<String> {
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+fn build_args(
+    proxy_url: &str,
+    timezone: Option<&str>,
+    language: Option<&str>,
+    diagnostic_mode: bool,
+) -> Vec<String> {
     let mut args = vec![format!("--proxy-server={proxy_url}")];
     if let Some(lang) = language {
         args.push(format!("--lang={lang}"));
     }
+    // Chromium on Windows ignores the TZ environment variable (Chromium issue 40200249),
+    // so pass the timezone as an explicit Chromium switch as well. On other platforms the
+    // TZ env var is honored, and this switch is not needed.
+    #[cfg(target_os = "windows")]
+    if let Some(tz) = timezone {
+        args.push(format!("--timezone-for-testing={tz}"));
+    }
     if diagnostic_mode {
         args.push(format!("--remote-debugging-port={DEBUG_PORT}"));
         args.push("--remote-debugging-address=127.0.0.1".to_string());
+        // Chromium 111+ rejects DevTools WebSocket connections whose Origin is not
+        // explicitly allowed; the CDP probe needs this to connect programmatically.
+        args.push("--remote-allow-origins=*".to_string());
     }
     args
 }
@@ -178,17 +199,42 @@ mod tests {
 
     #[test]
     fn args_include_proxy_and_lang() {
-        let args = build_args("socks5://127.0.0.1:7890", Some("en-US"), false);
+        let args = build_args("socks5://127.0.0.1:7890", None, Some("en-US"), false);
         assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:7890".to_string()));
         assert!(args.contains(&"--lang=en-US".to_string()));
         assert!(!args.iter().any(|a| a.contains("remote-debugging")));
     }
 
     #[test]
-    fn args_add_debug_port_when_diagnostic() {
-        let args = build_args("socks5://127.0.0.1:7890", None, true);
+    fn args_add_debug_port_and_allow_origins_when_diagnostic() {
+        let args = build_args("socks5://127.0.0.1:7890", None, None, true);
         assert!(args.contains(&format!("--remote-debugging-port={DEBUG_PORT}")));
         assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_string()));
+        assert!(args.contains(&"--remote-allow-origins=*".to_string()));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn args_add_timezone_switch_on_windows() {
+        let args = build_args(
+            "socks5://127.0.0.1:7890",
+            Some("America/Los_Angeles"),
+            None,
+            false,
+        );
+        assert!(args.contains(&"--timezone-for-testing=America/Los_Angeles".to_string()));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn args_omit_timezone_switch_off_windows() {
+        let args = build_args(
+            "socks5://127.0.0.1:7890",
+            Some("America/Los_Angeles"),
+            None,
+            false,
+        );
+        assert!(!args.iter().any(|a| a.contains("timezone-for-testing")));
     }
 
     #[test]
