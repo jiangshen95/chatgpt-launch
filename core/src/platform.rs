@@ -23,7 +23,9 @@ pub fn detect_app() -> Result<AppDetection, Error> {
     }
 }
 
-/// Best-effort observation of the launched app's open sockets.
+/// Best-effort observation of the launched app's open sockets, including its
+/// child processes (Electron/Chromium apps keep their network sockets in
+/// renderer/GPU/utility processes, not in the main process).
 pub fn observe_connections(pid: u32) -> Result<Vec<ConnectionInfo>, Error> {
     #[cfg(target_os = "macos")]
     {
@@ -106,29 +108,73 @@ mod macos {
         })
     }
 
-    pub fn observe(pid: u32) -> Result<Vec<ConnectionInfo>, Error> {
-        let out = Command::new("lsof")
-            .args(["-nP", "-i", "-a", "-p", &pid.to_string()])
-            .output()
-            .map_err(|e| Error::Platform(format!("lsof 不可用: {e}")))?;
+    /// BFS over the process tree starting at `pid`, returning each `(pid, name)`.
+    fn related_processes(pid: u32) -> Vec<(u32, String)> {
+        let mut seen: Vec<u32> = Vec::new();
+        let mut queue: Vec<u32> = vec![pid];
+        let mut out: Vec<(u32, String)> = Vec::new();
+        while let Some(p) = queue.pop() {
+            if seen.contains(&p) {
+                continue;
+            }
+            seen.push(p);
+            if let Some(name) = process_name(p) {
+                out.push((p, name));
+            }
+            if let Ok(o) = Command::new("pgrep")
+                .args(["-P", &p.to_string()])
+                .output()
+            {
+                for line in String::from_utf8_lossy(&o.stdout).lines() {
+                    if let Ok(c) = line.trim().parse::<u32>() {
+                        queue.push(c);
+                    }
+                }
+            }
+        }
+        out
+    }
 
+    fn process_name(pid: u32) -> Option<String> {
+        let out = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+
+    pub fn observe(pid: u32) -> Result<Vec<ConnectionInfo>, Error> {
         let mut conns = Vec::new();
-        for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
-            if let Some(idx) = line.find("->") {
-                let left = &line[..idx];
-                let right = &line[idx + 2..];
-                let local = left.split_whitespace().next_back().unwrap_or("");
-                let remote = right.split_whitespace().next().unwrap_or("");
-                let state = right
-                    .split('(')
-                    .nth(1)
-                    .and_then(|s| s.split(')').next())
-                    .unwrap_or("");
-                conns.push(ConnectionInfo {
-                    local: local.to_string(),
-                    remote: remote.to_string(),
-                    state: state.to_string(),
-                });
+        for (p, name) in related_processes(pid) {
+            let out = Command::new("lsof")
+                .args(["-nP", "-i", "-a", "-p", &p.to_string()])
+                .output()
+                .map_err(|e| Error::Platform(format!("lsof 不可用: {e}")))?;
+
+            for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
+                if let Some(idx) = line.find("->") {
+                    let left = &line[..idx];
+                    let right = &line[idx + 2..];
+                    let local = left.split_whitespace().next_back().unwrap_or("");
+                    let remote = right.split_whitespace().next().unwrap_or("");
+                    let state = right
+                        .split('(')
+                        .nth(1)
+                        .and_then(|s| s.split(')').next())
+                        .unwrap_or("");
+                    conns.push(ConnectionInfo {
+                        local: local.to_string(),
+                        remote: remote.to_string(),
+                        state: state.to_string(),
+                        pid: Some(p),
+                        process: Some(name.clone()),
+                    });
+                }
             }
         }
         Ok(conns)
@@ -138,6 +184,7 @@ mod macos {
 #[cfg(target_os = "windows")]
 mod windows {
     use super::*;
+    use std::collections::HashMap;
 
     pub fn detect() -> Result<AppDetection, Error> {
         // 1) 常规安装路径（非 Store 版本）。
@@ -215,24 +262,75 @@ mod windows {
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Electron/Chromium 的主进程与 renderer/GPU/utility 子进程共用同一可执行文件名，
+    /// 因此按进程名聚合即可覆盖整棵进程树。
+    fn related_processes(pid: u32) -> Vec<(u32, String)> {
+        let name = process_name(pid).unwrap_or_default();
+        let mut pids: Vec<u32> = if name.is_empty() {
+            Vec::new()
+        } else {
+            let script = format!(
+                "Get-Process -Name '{name}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output $_.Id }}"
+            );
+            run_powershell(&script)
+                .map(|out| {
+                    out.lines()
+                        .filter_map(|l| l.trim().parse::<u32>().ok())
+                        .collect::<Vec<u32>>()
+                })
+                .unwrap_or_default()
+        };
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+        let label = if name.is_empty() {
+            "<unknown>".to_string()
+        } else {
+            name
+        };
+        pids.into_iter().map(|p| (p, label.clone())).collect()
+    }
+
+    fn process_name(pid: u32) -> Option<String> {
+        let script = format!(
+            "(Get-Process -Id {pid} -ErrorAction SilentlyContinue).ProcessName"
+        );
+        let out = run_powershell(&script)?;
+        out.lines()
+            .map(str::trim)
+            .find(|s| !s.is_empty())
+            .map(String::from)
+    }
+
     pub fn observe(pid: u32) -> Result<Vec<ConnectionInfo>, Error> {
+        let procs = related_processes(pid);
+        let by_pid: HashMap<u32, String> = procs.into_iter().collect();
+
         let out = Command::new("netstat")
             .args(["-ano"])
             .output()
             .map_err(|e| Error::Platform(format!("netstat 不可用: {e}")))?;
 
-        let pid_str = pid.to_string();
         let mut conns = Vec::new();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let fields: Vec<&str> = line.split_whitespace().collect();
-            // Proto, Local, Foreign, State, PID
-            if fields.len() >= 5 && fields[4] == pid_str {
-                conns.push(ConnectionInfo {
-                    local: fields[1].to_string(),
-                    remote: fields[2].to_string(),
-                    state: fields[3].to_string(),
-                });
+            // Proto, Local, Foreign, State, PID (TCP only — UDP lines have no State).
+            if fields.len() < 5 {
+                continue;
             }
+            let Ok(p) = fields[4].parse::<u32>() else {
+                continue;
+            };
+            let Some(name) = by_pid.get(&p) else {
+                continue;
+            };
+            conns.push(ConnectionInfo {
+                local: fields[1].to_string(),
+                remote: fields[2].to_string(),
+                state: fields[3].to_string(),
+                pid: Some(p),
+                process: Some(name.clone()),
+            });
         }
         Ok(conns)
     }
@@ -278,28 +376,128 @@ mod linux {
         })
     }
 
+    /// BFS over the process tree starting at `pid`, returning each `(pid, name)`.
+    fn related_processes(pid: u32) -> Vec<(u32, String)> {
+        let mut seen: Vec<u32> = Vec::new();
+        let mut queue: Vec<u32> = vec![pid];
+        let mut out: Vec<(u32, String)> = Vec::new();
+        while let Some(p) = queue.pop() {
+            if seen.contains(&p) {
+                continue;
+            }
+            seen.push(p);
+            if let Some(name) = process_name(p) {
+                out.push((p, name));
+            }
+            if let Ok(o) = Command::new("pgrep")
+                .args(["-P", &p.to_string()])
+                .output()
+            {
+                for line in String::from_utf8_lossy(&o.stdout).lines() {
+                    if let Ok(c) = line.trim().parse::<u32>() {
+                        queue.push(c);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn process_name(pid: u32) -> Option<String> {
+        let out = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+
+    /// Parse the `users:(("name",pid=N,fd=M))` field of `ss -tnp`.
+    pub(super) fn parse_ss_process(field: &str) -> Option<(String, u32)> {
+        let i = field.find("users:((\"")?;
+        let rest = &field[i + "users:((\"".len()..];
+        let name_end = rest.find('"')?;
+        let name = rest[..name_end].to_string();
+        let after = &rest[name_end..];
+        let pid_at = after.find("pid=")?;
+        let after_pid = &after[pid_at + 4..];
+        let end = after_pid
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(after_pid.len());
+        let p: u32 = after_pid[..end].parse().ok()?;
+        Some((name, p))
+    }
+
     pub fn observe(pid: u32) -> Result<Vec<ConnectionInfo>, Error> {
+        let procs = related_processes(pid);
+        let pids: Vec<u32> = procs.iter().map(|(p, _)| *p).collect();
+
         let out = Command::new("ss")
             .args(["-tnp"])
             .output()
             .map_err(|e| Error::Platform(format!("ss 不可用: {e}")))?;
 
-        let needle = format!("pid={pid}");
         let mut conns = Vec::new();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
-            if !line.contains(&needle) {
-                continue;
-            }
             let fields: Vec<&str> = line.split_whitespace().collect();
             // State, Recv-Q, Send-Q, Local, Peer, Process...
-            if fields.len() >= 5 {
-                conns.push(ConnectionInfo {
-                    local: fields[3].to_string(),
-                    remote: fields[4].to_string(),
-                    state: fields[0].to_string(),
-                });
+            if fields.len() < 6 {
+                continue;
             }
+            let proc_field = fields.iter().rev().find(|f| f.contains("users:((")).cloned();
+            let Some((name, p)) = proc_field.and_then(parse_ss_process) else {
+                continue;
+            };
+            if !pids.contains(&p) {
+                continue;
+            }
+            conns.push(ConnectionInfo {
+                local: fields[3].to_string(),
+                remote: fields[4].to_string(),
+                state: fields[0].to_string(),
+                pid: Some(p),
+                process: Some(name),
+            });
         }
         Ok(conns)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_in_use_detects_loopback_target() {
+        let conns = vec![
+            ConnectionInfo {
+                local: "127.0.0.1:54321".into(),
+                remote: "127.0.0.1:7890".into(),
+                state: "ESTABLISHED".into(),
+                pid: Some(1),
+                process: Some("ChatGPT".into()),
+            },
+            ConnectionInfo {
+                local: "127.0.0.1:54322".into(),
+                remote: "1.2.3.4:443".into(),
+                state: "ESTABLISHED".into(),
+                pid: Some(2),
+                process: Some("ChatGPT".into()),
+            },
+        ];
+        assert!(proxy_in_use(&conns, 7890));
+        assert!(!proxy_in_use(&conns, 1080));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_ss_process_field() {
+        let (name, pid) = linux::parse_ss_process(r#"users:(("ChatGPT",pid=1234,fd=45))"#).unwrap();
+        assert_eq!(name, "ChatGPT");
+        assert_eq!(pid, 1234);
     }
 }

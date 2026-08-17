@@ -147,6 +147,12 @@ pub struct ConnectionInfo {
     pub local: String,
     pub remote: String,
     pub state: String,
+    /// Owning process id, when the platform tooling reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Owning process name, when the platform tooling reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
