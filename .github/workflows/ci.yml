@@ -43,6 +43,8 @@ jobs:
         run: npm run build
 
       - name: Test core crate
+        env:
+            TMPDIR: ${{ runner.temp }}
         run: cargo test -p chatgpt-launcher-core
 
       - name: Check workspace compiles
