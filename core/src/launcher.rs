@@ -170,8 +170,11 @@ fn build_args(
         // Prevent real-IP / DNS leakage around the proxy:
         // - WebRTC must not use non-proxied UDP; otherwise an `RTCPeerConnection`
         //   reveals the host's real public IP via ICE candidates to any page.
+        //   Set both the default and the forced policy — some Chromium builds
+        //   only honour one of the two.
         // - Disable QUIC (HTTP/3 UDP) so it cannot bypass the TCP proxy and leak
         //   the real network path / resolver.
+        args.push("--webrtc-ip-handling-policy=disable_non_proxied_udp".to_string());
         args.push("--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string());
         args.push("--disable-quic".to_string());
     }
@@ -250,6 +253,7 @@ mod tests {
     #[test]
     fn args_include_leak_prevention_flags() {
         let args = build_args("socks5://127.0.0.1:7890", None, None, false, true);
+        assert!(args.contains(&"--webrtc-ip-handling-policy=disable_non_proxied_udp".to_string()));
         assert!(
             args.contains(&"--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string())
         );

@@ -99,10 +99,14 @@ args: --proxy-server=<代理URL>  --lang=<语言>  --accept-lang=<语言>
 > `navigator.language`，避免 Windows 上回退到系统语言（如出口在美国却带 `zh-CN`）；
 > `--remote-allow-origins=*` 用于放行程序化 CDP 客户端连接本地调试端口（见下文"验证"）。
 >
-> **泄露防护**：`--force-webrtc-ip-handling-policy=disable_non_proxied_udp` 禁止 WebRTC 走
-> 非代理 UDP，从而避免 `RTCPeerConnection` 暴露真实出口 IP；`--disable-quic` 关闭 HTTP/3
-> UDP，强制走 TCP 代理。DNS 则由 SOCKS5（远端解析）/ HTTP 代理（代理侧解析）自然收敛，
-> 无本地 DNS 泄露。
+> **泄露防护**：`--webrtc-ip-handling-policy` / `--force-webrtc-ip-handling-policy` 均设为
+> `disable_non_proxied_udp`，禁止 WebRTC 走非代理 UDP；`--disable-quic` 关闭 HTTP/3 UDP，
+> 强制走 TCP 代理。DNS 则由 SOCKS5（远端解析）/ HTTP 代理（代理侧解析）自然收敛。
+>
+> ⚠ **已知局限**：部分 Electron/Chromium 构建对 WebRTC IP 策略开关支持不可靠（存在候选仍泄露
+> 真实 IP 的已知问题）。因此**命令行开关只是第一道防线**：若「CDP 探针 → WebRTC 泄露」仍标红，
+> 最可靠的做法是**在代理客户端阻断 UDP**、或改用 **TUN 模式**让 WebRTC 的 UDP 也走隧道——
+> 这两者只能由代理软件层面保证，启动器无法替代。
 
 ## 验证代理与时区是否真正生效
 

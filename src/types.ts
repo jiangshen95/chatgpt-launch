@@ -76,8 +76,13 @@ export interface CdpTarget {
   wsUrl: string;
 }
 
+export interface WebRtcCandidate {
+  ip: string;
+  kind: string;
+}
+
 export interface WebRtcCheck {
-  candidates: string[];
+  candidates: WebRtcCandidate[];
   leaked: boolean;
   note?: string | null;
 }

@@ -25,12 +25,21 @@ pub struct CdpTarget {
     pub ws_url: String,
 }
 
+/// A single ICE candidate address gathered during the WebRTC leak check, plus
+/// its candidate type (`host` / `srflx` / `relay`) for diagnosis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRtcCandidate {
+    pub ip: String,
+    pub kind: String,
+}
+
 /// Result of the WebRTC leak check: the ICE candidate addresses the renderer
 /// gathered, and whether any of them reveal a real (non-proxy) public IP.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebRtcCheck {
-    pub candidates: Vec<String>,
+    pub candidates: Vec<WebRtcCandidate>,
     pub leaked: bool,
     pub note: Option<String>,
 }
@@ -78,17 +87,18 @@ const SNAPSHOT_EXPR: &str = r#"(() => {
   }
 })()"#;
 
-/// Gather the WebRTC ICE candidate addresses the renderer can see. With
-/// `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` this should come
-/// back empty (no host / server-reflexive candidate leaks the real IP).
+/// Gather the WebRTC ICE candidate addresses (and their types) the renderer can
+/// see. With `disable_non_proxied_udp` this should come back empty — no host /
+/// server-reflexive candidate leaks the real IP.
 const WEBRTC_EXPR: &str = r#"new Promise((resolve) => {
-  const ips = new Set();
+  const out = [];
+  const seen = new Set();
   let done = false;
   const finish = (extra) => {
     if (done) return;
     done = true;
     try { pc.close(); } catch (_) {}
-    resolve(JSON.stringify(Object.assign({ ips: [...ips] }, extra)));
+    resolve(JSON.stringify(Object.assign({ candidates: out }, extra)));
   };
   let pc;
   try {
@@ -99,7 +109,11 @@ const WEBRTC_EXPR: &str = r#"new Promise((resolve) => {
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       const p = e.candidate.candidate.split(" ");
-      if (p.length >= 5 && p[4]) ips.add(p[4]);
+      // candidate:<foundation> <component> <transport> <priority> <ip> <port> typ <type> ...
+      if (p.length >= 8 && p[4]) {
+        const key = p[4] + "|" + p[7];
+        if (!seen.has(key)) { seen.add(key); out.push({ ip: p[4], kind: p[7] }); }
+      }
     } else {
       finish(null);
     }
@@ -206,11 +220,16 @@ fn check_webrtc(targets: &[CdpTarget], exit_ip: Option<&str>) -> Result<WebRtcCh
         out.note = Some("WebRTC 候选收集超时（可能已被禁用，无泄露）".to_string());
     }
     out.candidates = j
-        .get("ips")
+        .get("candidates")
         .and_then(|x| x.as_array())
         .map(|a| {
             a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
+                .filter_map(|x| {
+                    Some(WebRtcCandidate {
+                        ip: x.get("ip")?.as_str()?.to_string(),
+                        kind: x.get("kind")?.as_str().unwrap_or("").to_string(),
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -222,7 +241,12 @@ fn check_webrtc(targets: &[CdpTarget], exit_ip: Option<&str>) -> Result<WebRtcCh
     out.leaked = out
         .candidates
         .iter()
-        .any(|ip| is_leak_candidate(ip, exit_ip));
+        .any(|c| is_leak_candidate(&c.ip, exit_ip));
+    if out.leaked {
+        out.note = Some(
+            "检测到真实 IP 泄露：命令行 WebRTC 防护对该应用可能未生效，建议在代理客户端阻断 UDP 或改用 TUN 模式".to_string(),
+        );
+    }
     Ok(out)
 }
 
