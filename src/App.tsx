@@ -350,6 +350,22 @@ export default function App() {
                     </ul>
                   </div>
                 ))}
+              {probe.webrtc && (
+                <div className="panel-row">
+                  <span className="k">WebRTC 泄露</span>
+                  <span className="v">
+                    {probe.webrtc.leaked ? (
+                      <strong className="warn-text">检测到泄露（候选: {probe.webrtc.candidates.join(", ") || "无"}）</strong>
+                    ) : (
+                      <strong className="ok-text">未泄露 ✓</strong>
+                    )}
+                  </span>
+                  {probe.webrtc.candidates.length > 0 && (
+                    <span className="v dim mono">{probe.webrtc.candidates.join(", ")}</span>
+                  )}
+                  {probe.webrtc.note && <span className="v dim">{probe.webrtc.note}</span>}
+                </div>
+              )}
               {probe.hints.length > 0 && (
                 <ul className="warnings">
                   {probe.hints.map((h, i) => (

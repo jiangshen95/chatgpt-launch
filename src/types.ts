@@ -64,6 +64,12 @@ export interface CdpTarget {
   wsUrl: string;
 }
 
+export interface WebRtcCheck {
+  candidates: string[];
+  leaked: boolean;
+  note?: string | null;
+}
+
 export interface AppProbe {
   reachable: boolean;
   browser?: string | null;
@@ -73,6 +79,7 @@ export interface AppProbe {
   localTime?: string | null;
   exit?: ExitInfo | null;
   consistency?: ConsistencyResult | null;
+  webrtc?: WebRtcCheck | null;
   hints: string[];
 }
 

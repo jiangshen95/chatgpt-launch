@@ -138,7 +138,16 @@ fn build_args(
     language: Option<&str>,
     diagnostic_mode: bool,
 ) -> Vec<String> {
-    let mut args = vec![format!("--proxy-server={proxy_url}")];
+    let mut args = vec![
+        format!("--proxy-server={proxy_url}"),
+        // Prevent real-IP / DNS leakage around the proxy:
+        // - WebRTC must not use non-proxied UDP; otherwise an `RTCPeerConnection`
+        //   reveals the host's real public IP via ICE candidates to any page.
+        // - Disable QUIC (HTTP/3 UDP) so it cannot bypass the TCP proxy and leak
+        //   the real network path / resolver.
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string(),
+        "--disable-quic".to_string(),
+    ];
     if let Some(lang) = language {
         args.push(format!("--lang={lang}"));
         // `--lang` only sets the UI locale; `navigator.language` and the request
@@ -209,6 +218,15 @@ mod tests {
         assert!(args.contains(&"--lang=en-US".to_string()));
         assert!(args.contains(&"--accept-lang=en-US".to_string()));
         assert!(!args.iter().any(|a| a.contains("remote-debugging")));
+    }
+
+    #[test]
+    fn args_include_leak_prevention_flags() {
+        let args = build_args("socks5://127.0.0.1:7890", None, None, false);
+        assert!(
+            args.contains(&"--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string())
+        );
+        assert!(args.contains(&"--disable-quic".to_string()));
     }
 
     #[test]

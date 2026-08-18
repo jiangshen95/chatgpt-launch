@@ -25,6 +25,16 @@ pub struct CdpTarget {
     pub ws_url: String,
 }
 
+/// Result of the WebRTC leak check: the ICE candidate addresses the renderer
+/// gathered, and whether any of them reveal a real (non-proxy) public IP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRtcCheck {
+    pub candidates: Vec<String>,
+    pub leaked: bool,
+    pub note: Option<String>,
+}
+
 /// Result of probing a running (diagnostic-mode) ChatGPT app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +55,8 @@ pub struct AppProbe {
     pub exit: Option<ExitInfo>,
     /// Consistency verdict: in-app timezone/language vs the actual exit node.
     pub consistency: Option<ConsistencyResult>,
+    /// WebRTC leak check result.
+    pub webrtc: Option<WebRtcCheck>,
     /// Non-fatal diagnostics / caveats.
     pub hints: Vec<String>,
 }
@@ -65,6 +77,39 @@ const SNAPSHOT_EXPR: &str = r#"(() => {
     return JSON.stringify({ error: String(e) });
   }
 })()"#;
+
+/// Gather the WebRTC ICE candidate addresses the renderer can see. With
+/// `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` this should come
+/// back empty (no host / server-reflexive candidate leaks the real IP).
+const WEBRTC_EXPR: &str = r#"new Promise((resolve) => {
+  const ips = new Set();
+  let done = false;
+  const finish = (extra) => {
+    if (done) return;
+    done = true;
+    try { pc.close(); } catch (_) {}
+    resolve(JSON.stringify(Object.assign({ ips: [...ips] }, extra)));
+  };
+  let pc;
+  try {
+    pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  } catch (e) {
+    return resolve(JSON.stringify({ error: String(e) }));
+  }
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      const p = e.candidate.candidate.split(" ");
+      if (p.length >= 5 && p[4]) ips.add(p[4]);
+    } else {
+      finish(null);
+    }
+  };
+  pc.createDataChannel("leaktest");
+  pc.createOffer()
+    .then((o) => pc.setLocalDescription(o))
+    .catch((e) => finish({ error: String(e) }));
+  setTimeout(() => finish({ timeout: true }), 6000);
+})"#;
 
 #[derive(Debug, Default)]
 struct Snapshot {
@@ -131,6 +176,82 @@ fn read_snapshot(targets: &[CdpTarget]) -> Result<Snapshot, String> {
     Err(last_err)
 }
 
+/// Best-effort WebRTC leak check against the first usable target.
+fn check_webrtc(targets: &[CdpTarget], exit_ip: Option<&str>) -> Result<WebRtcCheck, String> {
+    let mut candidates: Vec<&CdpTarget> = targets.iter().filter(|t| t.kind == "page").collect();
+    if candidates.is_empty() {
+        candidates = targets.iter().filter(|t| !t.ws_url.is_empty()).collect();
+    }
+    let target = candidates
+        .first()
+        .ok_or("未找到可用的 CDP target，无法检测 WebRTC")?;
+
+    let mut session = CdpSession::connect(&target.ws_url)?;
+    let v = session.eval(WEBRTC_EXPR)?;
+    let s = v.as_str().ok_or("WebRTC 检测未返回有效结果")?;
+    let j: serde_json::Value =
+        serde_json::from_str(s).map_err(|e| format!("解析 WebRTC 结果失败: {e}"))?;
+
+    let mut out = WebRtcCheck {
+        candidates: Vec::new(),
+        leaked: false,
+        note: None,
+    };
+
+    if let Some(err) = j.get("error").and_then(|x| x.as_str()) {
+        out.note = Some(format!("WebRTC 检测失败: {err}"));
+        return Ok(out);
+    }
+    if j.get("timeout").is_some() {
+        out.note = Some("WebRTC 候选收集超时（可能已被禁用，无泄露）".to_string());
+    }
+    out.candidates = j
+        .get("ips")
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let Some(exit_ip) = exit_ip else {
+        out.note = Some("未取得出口 IP，无法判定 WebRTC 是否泄露".to_string());
+        return Ok(out);
+    };
+    out.leaked = out
+        .candidates
+        .iter()
+        .any(|ip| is_leak_candidate(ip, exit_ip));
+    Ok(out)
+}
+
+/// A candidate address counts as a leak only if it is a real, globally-routable
+/// IP that is not the proxy exit IP (mDNS `.local`, loopback, link-local and
+/// private addresses are all ignored).
+fn is_leak_candidate(ip: &str, exit_ip: &str) -> bool {
+    if ip.is_empty() || ip.ends_with(".local") {
+        return false;
+    }
+    if exit_ip.trim() == ip {
+        return false;
+    }
+    let Ok(addr) = ip.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    if addr.is_loopback() || addr.is_unspecified() {
+        return false;
+    }
+    match addr {
+        std::net::IpAddr::V4(v4) => !(v4.is_private() || v4.is_link_local()),
+        std::net::IpAddr::V6(v6) => {
+            let seg0 = v6.segments()[0];
+            // link-local fe80::/10 and unique-local fc00::/7
+            !((seg0 & 0xffc0) == 0xfe80 || (seg0 & 0xfe00) == 0xfc00)
+        }
+    }
+}
+
 /// Run the full probe against a ChatGPT app exposing CDP on `port` (loopback).
 pub fn probe(port: u16) -> Result<AppProbe, Error> {
     let base = format!("http://127.0.0.1:{port}");
@@ -172,6 +293,7 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
         local_time: None,
         exit: None,
         consistency: None,
+        webrtc: None,
         hints,
     };
 
@@ -208,6 +330,13 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
     out.consistency = out.exit.as_ref().map(|exit| {
         crate::consistency::check_observed(out.timezone.as_deref(), out.language.as_deref(), exit)
     });
+
+    // 4) WebRTC leak check: does `RTCPeerConnection` reveal a real public IP
+    // different from the proxy exit?
+    match check_webrtc(&targets, out.exit.as_ref().map(|e| e.ip.as_str())) {
+        Ok(w) => out.webrtc = Some(w),
+        Err(e) => out.hints.push(format!("WebRTC 泄露检测失败: {e}")),
+    }
 
     Ok(out)
 }
@@ -431,5 +560,25 @@ mod tests {
         assert_eq!(exit.country, "US");
         assert_eq!(exit.timezone, "America/Los_Angeles");
         assert_eq!(exit.source, "ipinfo.io (ChatGPT 实测)");
+    }
+
+    #[test]
+    fn leak_candidate_detection() {
+        let exit = "38.150.32.241";
+        // Real public IP that differs from the exit → leak.
+        assert!(is_leak_candidate("8.8.8.8", exit));
+        // The exit IP itself is not a leak.
+        assert!(!is_leak_candidate("38.150.32.241", exit));
+        // mDNS, loopback, private and link-local addresses are ignored.
+        assert!(!is_leak_candidate("a1b2.local", exit));
+        assert!(!is_leak_candidate("127.0.0.1", exit));
+        assert!(!is_leak_candidate("192.168.1.5", exit));
+        assert!(!is_leak_candidate("10.0.0.1", exit));
+        assert!(!is_leak_candidate("169.254.1.1", exit));
+        assert!(!is_leak_candidate("::1", exit));
+        assert!(!is_leak_candidate("fe80::1", exit));
+        assert!(!is_leak_candidate("fd00::1", exit));
+        // Public IPv6 that differs → leak.
+        assert!(is_leak_candidate("2606:4700::1", exit));
     }
 }
