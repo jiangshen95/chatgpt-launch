@@ -52,6 +52,27 @@ export interface ConnectionInfo {
   local: string;
   remote: string;
   state: string;
+  pid?: number | null;
+  process?: string | null;
+}
+
+export interface CdpTarget {
+  id: string;
+  kind: string;
+  title: string;
+  url: string;
+  wsUrl: string;
+}
+
+export interface AppProbe {
+  reachable: boolean;
+  browser?: string | null;
+  targets: CdpTarget[];
+  timezone?: string | null;
+  language?: string | null;
+  localTime?: string | null;
+  exit?: ExitInfo | null;
+  hints: string[];
 }
 
 export interface LaunchResult {

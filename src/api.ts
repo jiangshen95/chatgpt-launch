@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppDetection,
+  AppProbe,
   ConnectionInfo,
   LaunchResult,
   Profile,
@@ -23,3 +24,5 @@ export const launch = (id: string, diagnosticMode: boolean) =>
 export const detectApp = () => invoke<AppDetection>("detect_app");
 export const observeConnections = (pid: number) =>
   invoke<ConnectionInfo[]>("observe_connections", { pid });
+export const probeApp = (port: number) =>
+  invoke<AppProbe>("probe_app", { port });

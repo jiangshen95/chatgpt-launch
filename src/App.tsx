@@ -7,6 +7,7 @@ import {
   launch,
   listProfiles,
   observeConnections,
+  probeApp,
   saveProfile,
   testConnection,
 } from "./api";
@@ -15,6 +16,7 @@ import { ProfileCard } from "./components/ProfileCard";
 import { ProfileForm } from "./components/ProfileForm";
 import type {
   AppDetection,
+  AppProbe,
   ConnectionInfo,
   LaunchResult,
   Profile,
@@ -52,6 +54,8 @@ export default function App() {
     profile: Profile;
   } | null>(null);
   const [conns, setConns] = useState<ConnectionInfo[] | null>(null);
+  const [probe, setProbe] = useState<AppProbe | null>(null);
+  const [probing, setProbing] = useState(false);
 
   const noticeTimer = useRef<number | null>(null);
   const notify = (msg: string) => {
@@ -120,6 +124,7 @@ export default function App() {
   const handleLaunch = async (p: Profile) => {
     setBusyId(p.id);
     setConns(null);
+    setProbe(null);
     try {
       const result = await launch(p.id, globalDiagnostic);
       setLastLaunch({ result, profile: p });
@@ -165,6 +170,19 @@ export default function App() {
       setConns(list);
     } catch (e) {
       notify(`观测失败: ${e}`);
+    }
+  };
+
+  const handleProbe = async () => {
+    if (!lastLaunch || !lastLaunch.result.debugPort) return;
+    setProbing(true);
+    setProbe(null);
+    try {
+      setProbe(await probeApp(lastLaunch.result.debugPort));
+    } catch (e) {
+      notify(`探针失败: ${e}`);
+    } finally {
+      setProbing(false);
     }
   };
 
@@ -242,6 +260,11 @@ export default function App() {
           )}
           <div className="panel-actions">
             <button onClick={handleObserve}>观测连接</button>
+            {lastLaunch.result.diagnosticMode && (
+              <button className="primary" onClick={handleProbe} disabled={probing}>
+                {probing ? "探测中…" : "CDP 探针"}
+              </button>
+            )}
             {conns && (
               <span className="v">
                 检测到 {conns.length} 条连接；代理{" "}
@@ -257,6 +280,8 @@ export default function App() {
             <table className="conns">
               <thead>
                 <tr>
+                  <th>进程</th>
+                  <th>PID</th>
                   <th>本地</th>
                   <th>远端</th>
                   <th>状态</th>
@@ -265,6 +290,8 @@ export default function App() {
               <tbody>
                 {conns.map((c, i) => (
                   <tr key={i}>
+                    <td>{c.process ?? "—"}</td>
+                    <td className="mono">{c.pid ?? "—"}</td>
                     <td className="mono">{c.local}</td>
                     <td className="mono">{c.remote}</td>
                     <td>{c.state}</td>
@@ -272,6 +299,50 @@ export default function App() {
                 ))}
               </tbody>
             </table>
+          )}
+          {probe && (
+            <div className="probe">
+              <h4>CDP 探针结果 {probe.browser ? `（${probe.browser}）` : ""}</h4>
+              {!probe.reachable && (
+                <p className="warn-text">无法访问调试端口，ChatGPT 可能未处于诊断模式。</p>
+              )}
+              {probe.reachable && (
+                <div className="kv">
+                  <div>
+                    <span className="k">应用内时区</span>
+                    <span className="v mono">{probe.timezone ?? "—"}</span>
+                  </div>
+                  <div>
+                    <span className="k">应用内语言</span>
+                    <span className="v mono">{probe.language ?? "—"}</span>
+                  </div>
+                  <div>
+                    <span className="k">应用内本地时间</span>
+                    <span className="v mono">{probe.localTime ?? "—"}</span>
+                  </div>
+                  <div>
+                    <span className="k">实测出口 IP</span>
+                    <span className="v mono">{probe.exit?.ip ?? "—"}</span>
+                  </div>
+                  {probe.exit && (
+                    <div>
+                      <span className="k">实测出口位置</span>
+                      <span className="v">
+                        {probe.exit.country} {probe.exit.region} {probe.exit.city}
+                        {"  "}({probe.exit.timezone || "—"})
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {probe.hints.length > 0 && (
+                <ul className="warnings">
+                  {probe.hints.map((h, i) => (
+                    <li key={i}>{h}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </section>
       )}

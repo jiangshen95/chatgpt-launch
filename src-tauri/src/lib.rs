@@ -1,4 +1,6 @@
-use chatgpt_launcher_core::{consistency, geo, launcher, model::*, platform, ProfileStore};
+use chatgpt_launcher_core::{
+    consistency, geo, launcher, model::*, platform, probe, AppProbe, ProfileStore,
+};
 use tauri::{Manager, State};
 
 struct AppState {
@@ -84,6 +86,19 @@ fn observe_connections(pid: u32) -> Result<Vec<ConnectionInfo>, String> {
     platform::observe_connections(pid).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn probe_app(port: u16) -> Result<AppProbe, String> {
+    // The CDP probe performs blocking network I/O (HTTP + WebSocket to loopback);
+    // run it off the command handler and bound the total time to avoid stalling.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe::probe(port));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(25))
+        .map_err(|_| "探针超时（25s）：请确认已勾选诊断模式并成功启动".to_string())?
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -105,7 +120,8 @@ pub fn run() {
             apply_detected,
             launch,
             detect_app,
-            observe_connections
+            observe_connections,
+            probe_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
