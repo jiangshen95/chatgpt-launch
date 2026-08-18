@@ -342,6 +342,26 @@ export default function App() {
                   ))}
                 </ul>
               )}
+              {probe.targets.length > 0 && (
+                <table className="conns">
+                  <thead>
+                    <tr>
+                      <th>类型</th>
+                      <th>标题</th>
+                      <th>URL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {probe.targets.map((t) => (
+                      <tr key={t.id}>
+                        <td>{t.kind}</td>
+                        <td>{t.title || "—"}</td>
+                        <td className="mono">{t.url || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
         </section>

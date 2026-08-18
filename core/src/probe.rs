@@ -49,6 +49,86 @@ pub struct AppProbe {
 
 const PROBE_ENDPOINT: &str = "https://ipinfo.io/json";
 
+/// Single round-trip snapshot of what the renderer reports. Returned as a JSON
+/// string so a partial failure (e.g. `navigator` absent in a worker) still yields
+/// the fields that are available.
+const SNAPSHOT_EXPR: &str = r#"(() => {
+  try {
+    return JSON.stringify({
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+      lang: (typeof navigator !== "undefined" && navigator.language) || "",
+      now: new Date().toString()
+    });
+  } catch (e) {
+    return JSON.stringify({ error: String(e) });
+  }
+})()"#;
+
+#[derive(Debug, Default)]
+struct Snapshot {
+    timezone: Option<String>,
+    language: Option<String>,
+    local_time: Option<String>,
+}
+
+fn parse_snapshot(v: &serde_json::Value) -> Option<Snapshot> {
+    let s = v.as_str()?;
+    let j: serde_json::Value = serde_json::from_str(s).ok()?;
+    if j.get("error").is_some() {
+        return None;
+    }
+    let get = |k: &str| {
+        j.get(k)
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    Some(Snapshot {
+        timezone: get("tz"),
+        language: get("lang"),
+        local_time: get("now"),
+    })
+}
+
+/// Read the renderer snapshot from any page target (falling back to any target
+/// that exposes a WebSocket URL). Timezone is process-wide, so any renderer in
+/// the same app is a valid source.
+fn read_snapshot(targets: &[CdpTarget]) -> Result<Snapshot, String> {
+    let mut candidates: Vec<&CdpTarget> = targets.iter().filter(|t| t.kind == "page").collect();
+    if candidates.is_empty() {
+        candidates = targets.iter().filter(|t| !t.ws_url.is_empty()).collect();
+    }
+    if candidates.is_empty() {
+        return Err("未找到可用的 CDP target（页面可能尚未加载，可稍后重试）".to_string());
+    }
+
+    let mut last_err = "目标未返回有效快照".to_string();
+    for t in candidates {
+        let mut session = match CdpSession::connect(&t.ws_url) {
+            Ok(s) => s,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        // The renderer's execution context may not be ready immediately after
+        // launch; give each target a few short attempts before moving on.
+        for _ in 0..3 {
+            match session.eval(SNAPSHOT_EXPR) {
+                Ok(v) => {
+                    if let Some(snap) = parse_snapshot(&v) {
+                        return Ok(snap);
+                    }
+                    last_err = format!("目标「{}」未返回有效快照", t.url);
+                }
+                Err(e) => last_err = e,
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+    Err(last_err)
+}
+
 /// Run the full probe against a ChatGPT app exposing CDP on `port` (loopback).
 pub fn probe(port: u16) -> Result<AppProbe, Error> {
     let base = format!("http://127.0.0.1:{port}");
@@ -99,36 +179,18 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
         return Ok(out);
     }
 
-    // 1) Read the renderer's own timezone / language / local time.
-    if let Some(page) = targets
-        .iter()
-        .find(|t| t.kind == "page" && is_chat_target(t))
-    {
-        let mut session = match CdpSession::connect(&page.ws_url) {
-            Ok(s) => s,
-            Err(e) => {
-                out.hints.push(e);
-                return Ok(out);
-            }
-        };
-        out.timezone = session
-            .eval("Intl.DateTimeFormat().resolvedOptions().timeZone")
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .filter(|s| !s.is_empty());
-        out.language = session
-            .eval("navigator.language")
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .filter(|s| !s.is_empty());
-        out.local_time = session
-            .eval("new Date().toString()")
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .filter(|s| !s.is_empty());
-    } else {
-        out.hints
-            .push("未找到 ChatGPT 页面 target（页面可能尚未加载，可稍后重试）".to_string());
+    // 1) Read the renderer's own timezone / language / local time. The main
+    // window may be exposed under a non-obvious URL (or an empty one while it
+    // is still loading), so probe every page target instead of guessing its URL.
+    match read_snapshot(&targets) {
+        Ok(s) => {
+            out.timezone = s.timezone;
+            out.language = s.language;
+            out.local_time = s.local_time;
+        }
+        Err(e) => out
+            .hints
+            .push(format!("未能读取应用内时区/语言/本地时间：{e}")),
     }
 
     // 2) Actual egress through the app's own network stack.
@@ -212,11 +274,6 @@ fn parse_targets(v: &serde_json::Value) -> Vec<CdpTarget> {
             })
         })
         .collect()
-}
-
-fn is_chat_target(t: &CdpTarget) -> bool {
-    let u = t.url.to_ascii_lowercase();
-    u.contains("chatgpt") || u.contains("openai") || u.contains("chat.")
 }
 
 fn parse_ipinfo(text: &str) -> Result<ExitInfo, String> {
@@ -327,25 +384,33 @@ mod tests {
         let targets = parse_targets(&v);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, "A1");
-        assert!(is_chat_target(&targets[0]));
     }
 
     #[test]
-    fn chat_target_detection() {
-        assert!(is_chat_target(&CdpTarget {
-            id: "x".into(),
-            kind: "page".into(),
-            title: "ChatGPT".into(),
-            url: "https://chatgpt.com/".into(),
-            ws_url: "".into(),
-        }));
-        assert!(!is_chat_target(&CdpTarget {
-            id: "x".into(),
-            kind: "page".into(),
-            title: "other".into(),
-            url: "https://example.com/".into(),
-            ws_url: "".into(),
-        }));
+    fn parses_snapshot() {
+        let v = serde_json::Value::String(
+            r#"{"tz":"America/Los_Angeles","lang":"en-US","now":"Sat Jan 01 2022 00:00:00"}"#
+                .into(),
+        );
+        let snap = parse_snapshot(&v).unwrap();
+        assert_eq!(snap.timezone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(snap.language.as_deref(), Some("en-US"));
+        assert!(snap.local_time.is_some());
+    }
+
+    #[test]
+    fn snapshot_parses_partial_fields() {
+        let v = serde_json::Value::String(r#"{"tz":"Asia/Tokyo"}"#.into());
+        let snap = parse_snapshot(&v).unwrap();
+        assert_eq!(snap.timezone.as_deref(), Some("Asia/Tokyo"));
+        assert!(snap.language.is_none());
+        assert!(snap.local_time.is_none());
+    }
+
+    #[test]
+    fn snapshot_rejects_error_payload() {
+        let v = serde_json::Value::String(r#"{"error":"boom"}"#.into());
+        assert!(parse_snapshot(&v).is_none());
     }
 
     #[test]
