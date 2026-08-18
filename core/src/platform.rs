@@ -121,10 +121,7 @@ mod macos {
             if let Some(name) = process_name(p) {
                 out.push((p, name));
             }
-            if let Ok(o) = Command::new("pgrep")
-                .args(["-P", &p.to_string()])
-                .output()
-            {
+            if let Ok(o) = Command::new("pgrep").args(["-P", &p.to_string()]).output() {
                 for line in String::from_utf8_lossy(&o.stdout).lines() {
                     if let Ok(c) = line.trim().parse::<u32>() {
                         queue.push(c);
@@ -292,9 +289,7 @@ mod windows {
     }
 
     fn process_name(pid: u32) -> Option<String> {
-        let script = format!(
-            "(Get-Process -Id {pid} -ErrorAction SilentlyContinue).ProcessName"
-        );
+        let script = format!("(Get-Process -Id {pid} -ErrorAction SilentlyContinue).ProcessName");
         let out = run_powershell(&script)?;
         out.lines()
             .map(str::trim)
@@ -389,10 +384,7 @@ mod linux {
             if let Some(name) = process_name(p) {
                 out.push((p, name));
             }
-            if let Ok(o) = Command::new("pgrep")
-                .args(["-P", &p.to_string()])
-                .output()
-            {
+            if let Ok(o) = Command::new("pgrep").args(["-P", &p.to_string()]).output() {
                 for line in String::from_utf8_lossy(&o.stdout).lines() {
                     if let Ok(c) = line.trim().parse::<u32>() {
                         queue.push(c);
@@ -448,7 +440,11 @@ mod linux {
             if fields.len() < 6 {
                 continue;
             }
-            let proc_field = fields.iter().rev().find(|f| f.contains("users:((")).cloned();
+            let proc_field = fields
+                .iter()
+                .rev()
+                .find(|f| f.contains("users:(("))
+                .cloned();
             let Some((name, p)) = proc_field.and_then(parse_ss_process) else {
                 continue;
             };

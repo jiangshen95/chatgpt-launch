@@ -65,10 +65,7 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok())
                 .unwrap_or(serde_json::Value::Null);
-            let browser = v
-                .get("Browser")
-                .and_then(|x| x.as_str())
-                .map(String::from);
+            let browser = v.get("Browser").and_then(|x| x.as_str()).map(String::from);
             (true, browser)
         }
         _ => (false, None),
@@ -130,9 +127,8 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
             .and_then(|v| v.as_str().map(String::from))
             .filter(|s| !s.is_empty());
     } else {
-        out.hints.push(
-            "未找到 ChatGPT 页面 target（页面可能尚未加载，可稍后重试）".to_string(),
-        );
+        out.hints
+            .push("未找到 ChatGPT 页面 target（页面可能尚未加载，可稍后重试）".to_string());
     }
 
     // 2) Actual egress through the app's own network stack.
@@ -147,10 +143,7 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
 /// Create a throwaway CDP target navigated to a neutral echo endpoint, read the
 /// JSON body, and parse it. The request goes through the app's real network
 /// stack (proxy included), so it reflects the app's actual egress.
-fn probe_exit(
-    client: &reqwest::blocking::Client,
-    base: &str,
-) -> Result<ExitInfo, String> {
+fn probe_exit(client: &reqwest::blocking::Client, base: &str) -> Result<ExitInfo, String> {
     let resp = client
         .put(format!("{base}/json/new?{PROBE_ENDPOINT}"))
         .send()
