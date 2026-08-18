@@ -87,7 +87,9 @@ args: --proxy-server=<代理URL>  --lang=<语言>  --accept-lang=<语言>
                        --remote-allow-origins=*
 ```
 
-4. `spawn` 并返回 PID / 实际参数等结果。
+4. 把同一代理写入 `~/.codex/.env`（`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`/`NO_PROXY`/
+   `WS_PROXY`/`WSS_PROXY`），让 **Codex CLI** 的控制面请求也走该代理——文件里其余配置原样保留；
+5. `spawn` 并返回 PID / 实际参数等结果。
 
 > Windows 下 Chromium 忽略 `TZ` 环境变量，故额外注入 `--timezone-for-testing`；
 > `--lang` 仅设 UI 语言，`--accept-lang` 同时设置请求 `Accept-Language` 头与

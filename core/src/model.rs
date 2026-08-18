@@ -166,6 +166,9 @@ pub struct LaunchResult {
     pub diagnostic_mode: bool,
     pub debug_port: Option<u16>,
     pub exit_info: Option<ExitInfo>,
+    /// Non-fatal note about syncing `~/.codex/.env` (`None` = synced ok).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_env_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

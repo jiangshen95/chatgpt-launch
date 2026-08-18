@@ -92,6 +92,7 @@ export interface LaunchResult {
   diagnosticMode: boolean;
   debugPort?: number | null;
   exitInfo?: ExitInfo | null;
+  codexEnvNote?: string | null;
 }
 
 export interface AppDetection {

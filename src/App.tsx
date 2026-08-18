@@ -258,6 +258,17 @@ export default function App() {
               <span className="v dim">仅用于诊断，日常请关闭</span>
             </div>
           )}
+          {lastLaunch.result.codexEnvNote ? (
+            <div className="panel-row">
+              <span className="k">Codex 代理</span>
+              <span className="v dim">{lastLaunch.result.codexEnvNote}</span>
+            </div>
+          ) : (
+            <div className="panel-row">
+              <span className="k">Codex 代理</span>
+              <span className="v">已同步至 ~/.codex/.env</span>
+            </div>
+          )}
           <div className="panel-actions">
             <button onClick={handleObserve}>观测连接</button>
             {lastLaunch.result.diagnosticMode && (

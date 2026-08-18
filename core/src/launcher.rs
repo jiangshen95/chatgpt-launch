@@ -59,6 +59,12 @@ pub fn launch(profile: &Profile, diagnostic_mode: bool) -> Result<LaunchResult, 
     let resolved = resolve(profile)?;
     let proxy_url = profile.proxy.url();
 
+    // Keep Codex CLI on the same proxy by syncing its env file. Best-effort:
+    // a failure here must not block the app launch.
+    let codex_env_note = crate::codex_env::sync_proxy(&proxy_url)
+        .err()
+        .map(|e| format!("同步 ~/.codex/.env 失败: {e}"));
+
     let mut cmd = Command::new(&app_path);
     for (k, v) in build_env(
         &proxy_url,
@@ -98,6 +104,7 @@ pub fn launch(profile: &Profile, diagnostic_mode: bool) -> Result<LaunchResult, 
         diagnostic_mode,
         debug_port: diagnostic_mode.then_some(DEBUG_PORT),
         exit_info: resolved.exit_info,
+        codex_env_note,
     })
 }
 
