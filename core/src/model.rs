@@ -74,6 +74,42 @@ pub struct TelemetryToggles {
     pub disable_sparkle: bool,
 }
 
+/// Launch-time injection / hardening options. All are per-profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InjectionOptions {
+    /// Inject the timezone (`TZ` env + `--timezone-for-testing` on Windows).
+    /// Default off: it only rewrites the renderer layer, which can create a
+    /// cross-layer mismatch with the OS timezone / telemetry.
+    #[serde(default)]
+    pub inject_timezone: bool,
+    /// Inject the language (`--lang` / `--accept-lang` + `LANG` / `LC_ALL`).
+    /// Default off for the same reason as `inject_timezone`.
+    #[serde(default)]
+    pub inject_language: bool,
+    /// WebRTC / QUIC / DNS leak protection flags. Default on (pure hardening).
+    #[serde(default = "default_true")]
+    pub leak_protection: bool,
+    /// Sync the proxy into `~/.codex/.env`. Default on.
+    #[serde(default = "default_true")]
+    pub sync_codex_env: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for InjectionOptions {
+    fn default() -> Self {
+        Self {
+            inject_timezone: false,
+            inject_language: false,
+            leak_protection: true,
+            sync_codex_env: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
@@ -89,6 +125,9 @@ pub struct Profile {
     pub language: Option<String>,
     #[serde(default)]
     pub telemetry: TelemetryToggles,
+    /// Launch-time injection / hardening toggles.
+    #[serde(default)]
+    pub injection: InjectionOptions,
     /// Manual override of the ChatGPT binary path. `None` = auto-detect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_path: Option<String>,
@@ -106,6 +145,7 @@ impl Profile {
             timezone: None,
             language: None,
             telemetry: TelemetryToggles::default(),
+            injection: InjectionOptions::default(),
             app_path: None,
             created_at: now,
             updated_at: now,
@@ -166,7 +206,11 @@ pub struct LaunchResult {
     pub diagnostic_mode: bool,
     pub debug_port: Option<u16>,
     pub exit_info: Option<ExitInfo>,
-    /// Non-fatal note about syncing `~/.codex/.env` (`None` = synced ok).
+    /// Whether `~/.codex/.env` was synced this launch (`false` = option disabled
+    /// or sync failed).
+    #[serde(default)]
+    pub codex_env_synced: bool,
+    /// Non-fatal note about syncing `~/.codex/.env` (`None` = no error).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_env_note: Option<String>,
 }

@@ -14,6 +14,17 @@ export interface TelemetryToggles {
   disableSparkle: boolean;
 }
 
+export interface InjectionOptions {
+  /** 注入时区（TZ env + Windows --timezone-for-testing）。默认关。 */
+  injectTimezone: boolean;
+  /** 注入语言（--lang / --accept-lang + LANG / LC_ALL）。默认关。 */
+  injectLanguage: boolean;
+  /** WebRTC / QUIC / DNS 泄露防护。默认开。 */
+  leakProtection: boolean;
+  /** 同步代理到 ~/.codex/.env。默认开。 */
+  syncCodexEnv: boolean;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -23,6 +34,7 @@ export interface Profile {
   /** BCP-47 locale; null = auto-detect via proxy at launch. */
   language?: string | null;
   telemetry: TelemetryToggles;
+  injection: InjectionOptions;
   /** Manual override of the app binary path; null = auto-detect. */
   appPath?: string | null;
   createdAt: number;
@@ -92,6 +104,7 @@ export interface LaunchResult {
   diagnosticMode: boolean;
   debugPort?: number | null;
   exitInfo?: ExitInfo | null;
+  codexEnvSynced?: boolean;
   codexEnvNote?: string | null;
 }
 

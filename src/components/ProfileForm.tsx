@@ -17,6 +17,10 @@ export function ProfileForm({ initial, onSave, onCancel }: Props) {
   const [password, setPassword] = useState(initial?.proxy.password ?? "");
   const [timezone, setTimezone] = useState(initial?.timezone ?? "");
   const [language, setLanguage] = useState(initial?.language ?? "");
+  const [injectTimezone, setInjectTimezone] = useState(initial?.injection?.injectTimezone ?? false);
+  const [injectLanguage, setInjectLanguage] = useState(initial?.injection?.injectLanguage ?? false);
+  const [leakProtection, setLeakProtection] = useState(initial?.injection?.leakProtection ?? true);
+  const [syncCodexEnv, setSyncCodexEnv] = useState(initial?.injection?.syncCodexEnv ?? true);
   const [appPath, setAppPath] = useState(initial?.appPath ?? "");
 
   const submit = () => {
@@ -40,6 +44,12 @@ export function ProfileForm({ initial, onSave, onCancel }: Props) {
         disableSentry: false,
         disableStatsig: false,
         disableSparkle: false,
+      },
+      injection: {
+        injectTimezone,
+        injectLanguage,
+        leakProtection,
+        syncCodexEnv,
       },
       appPath: appPath.trim() || null,
       createdAt: initial?.createdAt ?? 0,
@@ -135,6 +145,50 @@ export function ProfileForm({ initial, onSave, onCancel }: Props) {
             placeholder="/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
           />
         </label>
+
+        <div className="telemetry">
+          <div className="telemetry-title">注入与防护选项</div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={injectTimezone}
+              onChange={(e) => setInjectTimezone(e.target.checked)}
+            />{" "}
+            注入时区（默认关）
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={injectLanguage}
+              onChange={(e) => setInjectLanguage(e.target.checked)}
+            />{" "}
+            注入语言（默认关）
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={leakProtection}
+              onChange={(e) => setLeakProtection(e.target.checked)}
+            />{" "}
+            WebRTC / QUIC / DNS 泄露防护（默认开）
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={syncCodexEnv}
+              onChange={(e) => setSyncCodexEnv(e.target.checked)}
+            />{" "}
+            同步代理到 ~/.codex/.env（默认开）
+          </label>
+          {(injectTimezone || injectLanguage) && (
+            <p className="warn-text">
+              ⚠ 注入时区/语言只改浏览器渲染层，不会改操作系统本身，也不影响桌面版遥测
+              （Sentry/Statsig）上报的真实系统信息。若系统时区/语言与出口不一致，注入反而
+              可能造成「浏览器层=出口、系统层=本地」的跨层矛盾，更易被识别。建议先手动把
+              系统时区/区域/语言改为与出口一致，再开启。
+            </p>
+          )}
+        </div>
 
         <div className="telemetry">
           <div className="telemetry-title">

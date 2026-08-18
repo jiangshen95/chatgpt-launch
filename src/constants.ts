@@ -72,6 +72,12 @@ export function newBlankProfile(): Profile {
     timezone: null,
     language: null,
     telemetry: { disableSentry: false, disableStatsig: false, disableSparkle: false },
+    injection: {
+      injectTimezone: false,
+      injectLanguage: false,
+      leakProtection: true,
+      syncCodexEnv: true,
+    },
     appPath: null,
     createdAt: 0,
     updatedAt: 0,
