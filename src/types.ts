@@ -72,6 +72,7 @@ export interface AppProbe {
   language?: string | null;
   localTime?: string | null;
   exit?: ExitInfo | null;
+  consistency?: ConsistencyResult | null;
   hints: string[];
 }
 

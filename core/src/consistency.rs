@@ -7,9 +7,28 @@ use crate::model::{ConsistencyResult, ExitInfo, Profile};
 /// coarse (country -> timezone prefix), and unknown countries simply produce no
 /// warning rather than a false positive.
 pub fn check(profile: &Profile, exit: &ExitInfo) -> ConsistencyResult {
+    compare(
+        profile.timezone.as_deref(),
+        profile.language.as_deref(),
+        exit,
+    )
+}
+
+/// Compare *observed* values (e.g. probed from the running app via CDP) against
+/// the exit node. Used by the CDP probe to flag, say, a US exit paired with a
+/// zh-CN in-app locale.
+pub fn check_observed(
+    timezone: Option<&str>,
+    language: Option<&str>,
+    exit: &ExitInfo,
+) -> ConsistencyResult {
+    compare(timezone, language, exit)
+}
+
+fn compare(timezone: Option<&str>, language: Option<&str>, exit: &ExitInfo) -> ConsistencyResult {
     let mut warnings = Vec::new();
 
-    if let Some(tz) = profile.timezone.as_deref().filter(|t| !t.is_empty()) {
+    if let Some(tz) = timezone.filter(|t| !t.is_empty()) {
         if let Some(prefixes) = tz_prefixes_for_country(&exit.country) {
             if !prefixes.iter().any(|p| tz.starts_with(p)) {
                 warnings.push(format!(
@@ -20,7 +39,7 @@ pub fn check(profile: &Profile, exit: &ExitInfo) -> ConsistencyResult {
         }
     }
 
-    if let Some(lang) = profile.language.as_deref().filter(|l| !l.is_empty()) {
+    if let Some(lang) = language.filter(|l| !l.is_empty()) {
         if let Some(expected) = language_for_country(&exit.country) {
             if !lang_region_matches(lang, &expected) {
                 warnings.push(format!(
@@ -113,5 +132,19 @@ mod tests {
         let r = check(&p, &us_exit());
         assert!(!r.ok);
         assert!(r.warnings.iter().any(|w| w.contains("语言")));
+    }
+
+    #[test]
+    fn observed_zh_language_against_us_exit_warns() {
+        let r = check_observed(Some("America/Los_Angeles"), Some("zh-CN"), &us_exit());
+        assert!(!r.ok);
+        assert!(r.warnings.iter().any(|w| w.contains("语言")));
+        assert!(!r.warnings.iter().any(|w| w.contains("时区")));
+    }
+
+    #[test]
+    fn observed_values_matching_exit_have_no_warnings() {
+        let r = check_observed(Some("America/Los_Angeles"), Some("en-US"), &us_exit());
+        assert!(r.ok, "unexpected warnings: {:?}", r.warnings);
     }
 }

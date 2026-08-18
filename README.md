@@ -80,7 +80,7 @@ cargo test -p chatgpt-launcher-core
 ```text
 env:  HTTPS_PROXY / HTTP_PROXY / ALL_PROXY / NO_PROXY
       TZ=<时区>  LANG=<语言>  LC_ALL=<语言>
-args: --proxy-server=<代理URL>  --lang=<语言>
+args: --proxy-server=<代理URL>  --lang=<语言>  --accept-lang=<语言>
       （仅 Windows） --timezone-for-testing=<时区>
       （诊断模式追加） --remote-debugging-port=9224 --remote-debugging-address=127.0.0.1
                        --remote-allow-origins=*
@@ -89,6 +89,8 @@ args: --proxy-server=<代理URL>  --lang=<语言>
 4. `spawn` 并返回 PID / 实际参数等结果。
 
 > Windows 下 Chromium 忽略 `TZ` 环境变量，故额外注入 `--timezone-for-testing`；
+> `--lang` 仅设 UI 语言，`--accept-lang` 同时设置请求 `Accept-Language` 头与
+> `navigator.language`，避免 Windows 上回退到系统语言（如出口在美国却带 `zh-CN`）；
 > `--remote-allow-origins=*` 用于放行程序化 CDP 客户端连接本地调试端口（见下文"验证"）。
 
 ## 验证代理与时区是否真正生效
@@ -102,7 +104,8 @@ args: --proxy-server=<代理URL>  --lang=<语言>
 3. 点击「CDP 探针」：读取 ChatGPT 渲染进程真实上报的
    - 时区（`Intl.DateTimeFormat().resolvedOptions().timeZone`）、
    - 语言（`navigator.language`）、本地时间（`new Date()`）、
-   - 实测出口 IP/位置/时区（新建临时 target 走 ChatGPT 自身网络栈访问 `ipinfo.io/json`）。
+   - 实测出口 IP/位置/时区（新建临时 target 走 ChatGPT 自身网络栈访问 `ipinfo.io/json`），
+   - **一致性判定**：自动比对应用内时区/语言与实测出口，明显冲突（如美国出口 + `zh-CN`）直接标红。
 
    若实测出口 IP 与「测试」的出口一致，说明 `--proxy-server` 注入生效；若显示本机 IP，
    说明 Store 版未吃进代理参数。时区同理，与系统时区对比即可判断 `--timezone-for-testing`

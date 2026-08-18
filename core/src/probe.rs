@@ -10,7 +10,7 @@
 //!   echo endpoint (`ipinfo.io/json`) through the app's own network stack.
 
 use crate::error::Error;
-use crate::model::ExitInfo;
+use crate::model::{ConsistencyResult, ExitInfo};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -43,6 +43,8 @@ pub struct AppProbe {
     pub local_time: Option<String>,
     /// Actual egress observed through the app's network stack.
     pub exit: Option<ExitInfo>,
+    /// Consistency verdict: in-app timezone/language vs the actual exit node.
+    pub consistency: Option<ConsistencyResult>,
     /// Non-fatal diagnostics / caveats.
     pub hints: Vec<String>,
 }
@@ -169,6 +171,7 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
         language: None,
         local_time: None,
         exit: None,
+        consistency: None,
         hints,
     };
 
@@ -198,6 +201,13 @@ pub fn probe(port: u16) -> Result<AppProbe, Error> {
         Ok(exit) => out.exit = Some(exit),
         Err(e) => out.hints.push(format!("实测出口失败: {e}")),
     }
+
+    // 3) Consistency verdict: compare what the app *actually* reports against
+    // the exit node, so an obvious mismatch (e.g. US exit + zh-CN locale) is
+    // surfaced instead of left for the user to eyeball.
+    out.consistency = out.exit.as_ref().map(|exit| {
+        crate::consistency::check_observed(out.timezone.as_deref(), out.language.as_deref(), exit)
+    });
 
     Ok(out)
 }

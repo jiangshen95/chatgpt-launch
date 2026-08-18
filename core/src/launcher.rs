@@ -141,6 +141,11 @@ fn build_args(
     let mut args = vec![format!("--proxy-server={proxy_url}")];
     if let Some(lang) = language {
         args.push(format!("--lang={lang}"));
+        // `--lang` only sets the UI locale; `navigator.language` and the request
+        // `Accept-Language` header follow the accept-languages list, which on
+        // Windows otherwise falls back to the OS locale. Setting both keeps the
+        // visible locale and the HTTP language header consistent with the exit.
+        args.push(format!("--accept-lang={lang}"));
     }
     // Chromium on Windows ignores the TZ environment variable (Chromium issue 40200249),
     // so pass the timezone as an explicit Chromium switch as well. On other platforms the
@@ -202,6 +207,7 @@ mod tests {
         let args = build_args("socks5://127.0.0.1:7890", None, Some("en-US"), false);
         assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:7890".to_string()));
         assert!(args.contains(&"--lang=en-US".to_string()));
+        assert!(args.contains(&"--accept-lang=en-US".to_string()));
         assert!(!args.iter().any(|a| a.contains("remote-debugging")));
     }
 

@@ -335,6 +335,21 @@ export default function App() {
                   )}
                 </div>
               )}
+              {probe.consistency &&
+                (probe.consistency.ok ? (
+                  <p className="ok-text">
+                    一致性检查通过：应用内时区/语言与实测出口一致。
+                  </p>
+                ) : (
+                  <div className="consistency-warn">
+                    <strong className="warn-text">⚠ 一致性检查未通过：</strong>
+                    <ul className="warnings">
+                      {probe.consistency.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
               {probe.hints.length > 0 && (
                 <ul className="warnings">
                   {probe.hints.map((h, i) => (
