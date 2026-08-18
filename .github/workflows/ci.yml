@@ -11,7 +11,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # os: ubuntu-latest
+        # os: macos-latest
+        os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -52,8 +54,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-          - os: macos-latest
+          # - os: ubuntu-latest
+          # - os: macos-latest
           - os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -83,7 +85,7 @@ jobs:
         run: npm run tauri build
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: chatgpt-launcher-${{ matrix.os }}
           path: |
