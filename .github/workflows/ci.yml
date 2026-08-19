@@ -43,12 +43,6 @@ jobs:
         run: npm run build
 
       - name: Test core crate
-        env:
-          # macOS runners sometimes leave TMPDIR pointing at a /var/folders path
-          # whose `T/` subdirectory no longer exists, which makes rustdoc's
-          # doctest step fail with "failed to create temporary directory".
-          # Point it at the runner's guaranteed temp directory instead.
-          TMPDIR: ${{ runner.temp }}
         run: cargo test -p chatgpt-launcher-core
 
       - name: Check workspace compiles

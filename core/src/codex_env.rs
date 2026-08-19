@@ -99,39 +99,39 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn tmp_env() -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!("chatgpt-launcher-test-{}", uuid::Uuid::new_v4()));
-        p.push(".codex");
-        p.push(".env");
-        p
+    /// A unique per-test directory under the system temp dir. Tests must only
+    /// touch this directory — never the temp dir itself.
+    fn tmp_root() -> PathBuf {
+        std::env::temp_dir().join(format!("chatgpt-launcher-test-{}", uuid::Uuid::new_v4()))
     }
 
-    fn cleanup(path: &Path) {
-        // remove the per-test root (two levels above `.env`)
-        if let Some(root) = path
-            .parent()
-            .and_then(|d| d.parent())
-            .and_then(|d| d.parent())
-        {
+    fn cleanup(root: &Path) {
+        // Safety guard: only remove our own per-test directory, never the temp dir.
+        let is_ours = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("chatgpt-launcher-test-"));
+        if is_ours {
             let _ = std::fs::remove_dir_all(root);
         }
     }
 
     #[test]
     fn writes_proxy_keys_to_new_file() {
-        let path = tmp_env();
+        let root = tmp_root();
+        let path = root.join(".codex").join(".env");
         sync_proxy_at(&path, "socks5://127.0.0.1:7890").unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("HTTPS_PROXY=socks5://127.0.0.1:7890"));
         assert!(text.contains("ALL_PROXY=socks5://127.0.0.1:7890"));
         assert!(text.contains("NO_PROXY=localhost,127.0.0.1,::1"));
-        cleanup(&path);
+        cleanup(&root);
     }
 
     #[test]
     fn preserves_unrelated_lines_and_replaces_proxy() {
-        let path = tmp_env();
+        let root = tmp_root();
+        let path = root.join(".codex").join(".env");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "OPENAI_API_KEY=sk-test\nHTTP_PROXY=old\n# comment\n").unwrap();
 
@@ -145,12 +145,13 @@ mod tests {
             "text: {text}"
         );
         assert!(!text.contains("HTTP_PROXY=old"), "text: {text}");
-        cleanup(&path);
+        cleanup(&root);
     }
 
     #[test]
     fn strips_stale_lowercase_proxy_keys() {
-        let path = tmp_env();
+        let root = tmp_root();
+        let path = root.join(".codex").join(".env");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "http_proxy=old-lower\nKEEP=1\n").unwrap();
 
@@ -158,6 +159,6 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("http_proxy"), "text: {text}");
         assert!(text.contains("KEEP=1"), "text: {text}");
-        cleanup(&path);
+        cleanup(&root);
     }
 }
